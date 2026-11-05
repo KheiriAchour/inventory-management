@@ -6,6 +6,7 @@ export default {
     orders: 'Orders',
     finance: 'Finance',
     demandForecast: 'Demand Forecast',
+    restocking: 'Restocking',
     companyName: 'Catalyst Components',
     subtitle: 'Inventory Management System'
   },
@@ -101,6 +102,39 @@ export default {
     }
   },
 
+  // Restocking
+  restocking: {
+    title: 'Restocking',
+    description: 'Choose a budget and restock items forecast to fall short of demand',
+    loadError: 'Failed to load restocking data',
+    budget: 'Budget',
+    budgetSlider: 'Restocking budget',
+    plannedSpend: 'Planned Spend',
+    remainingBudget: 'Remaining Budget',
+    leadTime: 'Estimated Lead Time',
+    days: '{days} days',
+    recommendedItems: 'Recommended Items',
+    overBudget: 'Planned spend exceeds the budget. Reduce quantities or raise the budget to place the order.',
+    noCandidates: 'No items are forecast to fall short of demand.',
+    noRecommendations: 'The current budget is too low to restock any items. Increase the budget.',
+    placeOrder: 'Place Order',
+    submitting: 'Submitting...',
+    orderSuccess: 'Order {id} submitted. Estimated lead time: {days} days.',
+    viewOrders: 'View submitted orders',
+    orderFailed: 'Failed to place order',
+    table: {
+      sku: 'SKU',
+      name: 'Item',
+      category: 'Category',
+      trend: 'Trend',
+      shortfall: 'Shortfall',
+      quantity: 'Order Qty',
+      unitCost: 'Unit Cost',
+      lineTotal: 'Line Total',
+      leadTime: 'Lead Time'
+    }
+  },
+
   // Orders
   orders: {
     title: 'Orders',
@@ -112,6 +146,20 @@ export default {
     onTimeDelivery: 'On-Time Delivery',
     itemsCount: '{count} items',
     quantity: 'Qty',
+    submitted: {
+      title: 'Submitted Orders',
+      empty: 'No restocking orders have been submitted yet.',
+      loadError: 'Failed to load submitted orders',
+      leadTime: '{days} days',
+      status: 'Submitted',
+      orderId: 'Order ID',
+      orderDate: 'Order Date',
+      items: 'Items',
+      totalValue: 'Total Value',
+      deliveryLeadTime: 'Delivery Lead Time',
+      expectedDelivery: 'Expected Delivery',
+      statusLabel: 'Status'
+    },
     table: {
       orderNumber: 'Order Number',
       orderId: 'Order ID',

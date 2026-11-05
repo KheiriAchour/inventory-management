@@ -75,6 +75,45 @@
         </div>
       </div>
     </div>
+
+    <!-- Submitted restocking orders: intentionally ignores the FilterBar filters and
+         has its own loading/error state so it never affects the orders table above -->
+    <div class="card submitted-card">
+      <div class="card-header">
+        <h3 class="card-title">{{ t('orders.submitted.title') }} ({{ submittedOrders.length }})</h3>
+      </div>
+      <div v-if="submittedLoading" class="loading">{{ t('common.loading') }}</div>
+      <div v-else-if="submittedError" class="error">{{ submittedError }}</div>
+      <div v-else-if="submittedOrders.length === 0" class="submitted-empty">
+        {{ t('orders.submitted.empty') }}
+      </div>
+      <div v-else class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>{{ t('orders.submitted.orderId') }}</th>
+              <th>{{ t('orders.submitted.orderDate') }}</th>
+              <th>{{ t('orders.submitted.items') }}</th>
+              <th>{{ t('orders.submitted.totalValue') }}</th>
+              <th>{{ t('orders.submitted.deliveryLeadTime') }}</th>
+              <th>{{ t('orders.submitted.expectedDelivery') }}</th>
+              <th>{{ t('orders.submitted.statusLabel') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="so in submittedOrders" :key="so.id">
+              <td><strong>{{ so.id }}</strong></td>
+              <td>{{ formatDate(so.order_date) }}</td>
+              <td>{{ so.items.length }}</td>
+              <td><strong>{{ formatSubmittedValue(so.total_value) }}</strong></td>
+              <td>{{ t('orders.submitted.leadTime', { days: so.lead_time_days }) }}</td>
+              <td>{{ formatDate(so.expected_delivery) }}</td>
+              <td><span class="badge info">{{ t('orders.submitted.status') }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -83,6 +122,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '../api'
 import { useFilters } from '../composables/useFilters'
 import { useI18n } from '../composables/useI18n'
+import { formatCurrency } from '../utils/currency'
 
 export default {
   name: 'Orders',
@@ -104,6 +144,25 @@ export default {
       selectedStatus,
       getCurrentFilters
     } = useFilters()
+
+    const submittedOrders = ref([])
+    const submittedLoading = ref(true)
+    const submittedError = ref(null)
+
+    const loadSubmittedOrders = async () => {
+      try {
+        submittedLoading.value = true
+        submittedError.value = null
+        submittedOrders.value = await api.getSubmittedOrders()
+      } catch (err) {
+        submittedError.value = t('orders.submitted.loadError') + ': ' + err.message
+      } finally {
+        submittedLoading.value = false
+      }
+    }
+
+    // Values are USD from the API; formatCurrency converts for JPY
+    const formatSubmittedValue = (usd) => formatCurrency(usd, currentCurrency.value)
 
     const loadOrders = async () => {
       try {
@@ -153,7 +212,10 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    onMounted(() => {
+      loadOrders()
+      loadSubmittedOrders()
+    })
 
     return {
       t,
@@ -164,6 +226,10 @@ export default {
       getOrderStatusClass,
       formatDate,
       currencySymbol,
+      submittedOrders,
+      submittedLoading,
+      submittedError,
+      formatSubmittedValue,
       translateProductName,
       translateCustomerName
     }
@@ -172,6 +238,16 @@ export default {
 </script>
 
 <style scoped>
+.submitted-card {
+  margin-top: 1.5rem;
+}
+
+.submitted-empty {
+  padding: 2rem;
+  text-align: center;
+  color: #64748b;
+}
+
 /* Fixed table layout to prevent column shifting */
 .orders-table {
   table-layout: fixed;

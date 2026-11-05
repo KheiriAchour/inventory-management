@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
@@ -89,6 +90,11 @@ class DemandForecast(BaseModel):
     forecasted_demand: int
     trend: str
     period: str
+    # Cost, category and stock live on the forecast record because most forecast
+    # SKUs have no inventory.json entry. Optional so older data still validates.
+    unit_cost: Optional[float] = None
+    category: Optional[str] = None
+    quantity_on_hand: Optional[int] = None
 
 class BacklogItem(BaseModel):
     id: str
@@ -119,6 +125,89 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+# Restocking models
+class RestockingCandidate(BaseModel):
+    sku: str
+    name: str
+    category: str
+    trend: str
+    quantity_on_hand: int
+    forecasted_demand: int
+    shortfall: int
+    unit_cost: float
+    lead_time_days: int
+
+class RestockingCandidates(BaseModel):
+    items: List[RestockingCandidate]
+    max_budget: float
+
+class RestockingOrderItemRequest(BaseModel):
+    sku: str
+    quantity: int
+
+class CreateRestockingOrderRequest(BaseModel):
+    budget: float
+    items: List[RestockingOrderItemRequest]
+
+class SubmittedOrderItem(BaseModel):
+    sku: str
+    name: str
+    category: str
+    quantity: int
+    unit_cost: float
+    line_total: float
+    lead_time_days: int
+
+class SubmittedOrder(BaseModel):
+    id: str
+    items: List[SubmittedOrderItem]
+    total_value: float
+    budget: float
+    lead_time_days: int
+    order_date: str
+    expected_delivery: str
+    status: str
+
+# Delivery lead time in days, by item category
+LEAD_TIME_DAYS = {
+    'Actuators': 14,
+    'Circuit Boards': 10,
+    'Controllers': 21,
+    'Power Supplies': 7,
+    'Sensors': 10,
+}
+DEFAULT_LEAD_TIME_DAYS = 14
+
+# Restocking orders placed since startup. This is the app's only mutable state;
+# it lives in memory, so it resets when the server restarts.
+submitted_orders: List[dict] = []
+
+def get_restocking_candidates_data() -> list:
+    """Forecast items that need restocking: forecasted demand exceeds stock on hand."""
+    candidates = []
+    for forecast in demand_forecasts:
+        unit_cost = forecast.get('unit_cost')
+        on_hand = forecast.get('quantity_on_hand')
+        # Skip records without cost/stock data; there is nothing to price them with
+        if unit_cost is None or on_hand is None:
+            continue
+        shortfall = max(forecast['forecasted_demand'] - on_hand, 0)
+        if shortfall == 0:
+            continue
+        category = forecast.get('category') or ''
+        candidates.append({
+            'sku': forecast['item_sku'],
+            'name': forecast['item_name'],
+            'category': category,
+            'trend': forecast['trend'],
+            'quantity_on_hand': on_hand,
+            'forecasted_demand': forecast['forecasted_demand'],
+            'shortfall': shortfall,
+            'unit_cost': unit_cost,
+            'lead_time_days': LEAD_TIME_DAYS.get(category, DEFAULT_LEAD_TIME_DAYS),
+        })
+    return candidates
 
 # API endpoints
 @app.get("/")
@@ -178,6 +267,79 @@ def get_backlog():
         item_dict["has_purchase_order"] = has_po
         result.append(item_dict)
     return result
+
+@app.get("/api/restocking/candidates", response_model=RestockingCandidates)
+def get_restocking_candidates():
+    """Forecast items needing restock, plus the cost of covering every shortfall (slider maximum)"""
+    items = get_restocking_candidates_data()
+    max_budget = round(sum(item['shortfall'] * item['unit_cost'] for item in items), 2)
+    return {"items": items, "max_budget": max_budget}
+
+@app.post("/api/restocking/orders", response_model=SubmittedOrder, status_code=201)
+def create_restocking_order(request: CreateRestockingOrderRequest):
+    """Submit a restocking order. Prices and lead times come from server data, never from the client."""
+    if not request.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    candidates = {c['sku']: c for c in get_restocking_candidates_data()}
+    seen_skus = set()
+    order_items = []
+
+    for requested in request.items:
+        # Reject duplicate SKUs so a split quantity cannot bypass the shortfall check below
+        if requested.sku in seen_skus:
+            raise HTTPException(status_code=400, detail=f"Duplicate SKU {requested.sku}")
+        seen_skus.add(requested.sku)
+
+        candidate = candidates.get(requested.sku)
+        if not candidate:
+            raise HTTPException(status_code=400, detail=f"SKU {requested.sku} is not available for restocking")
+        if requested.quantity <= 0 or requested.quantity > candidate['shortfall']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Quantity for {requested.sku} must be between 1 and {candidate['shortfall']}"
+            )
+
+        order_items.append({
+            'sku': candidate['sku'],
+            'name': candidate['name'],
+            'category': candidate['category'],
+            'quantity': requested.quantity,
+            'unit_cost': candidate['unit_cost'],
+            'line_total': round(requested.quantity * candidate['unit_cost'], 2),
+            'lead_time_days': candidate['lead_time_days'],
+        })
+
+    total_value = round(sum(item['line_total'] for item in order_items), 2)
+    if total_value > request.budget:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order total {total_value} exceeds budget {request.budget}"
+        )
+
+    # The order arrives when its slowest item does, so use the longest lead time
+    lead_time_days = max(item['lead_time_days'] for item in order_items)
+    order_date = datetime.now().replace(microsecond=0)
+
+    order = {
+        'id': f"RS-{len(submitted_orders) + 1:04d}",
+        'items': order_items,
+        'total_value': total_value,
+        'budget': request.budget,
+        'lead_time_days': lead_time_days,
+        'order_date': order_date.isoformat(),
+        'expected_delivery': (order_date + timedelta(days=lead_time_days)).isoformat(),
+        'status': 'Submitted',
+    }
+    submitted_orders.append(order)
+    return order
+
+# Deliberately not /api/orders/submitted: GET /api/orders/{order_id} would capture
+# "submitted" as an order id (and 404) depending on route registration order.
+@app.get("/api/submitted-orders", response_model=List[SubmittedOrder])
+def get_submitted_orders():
+    """Restocking orders placed since server start, newest first"""
+    return list(reversed(submitted_orders))
 
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary(
